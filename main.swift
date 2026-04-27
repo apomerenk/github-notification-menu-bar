@@ -196,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func renderBadge(state: BadgeState) {
         guard let button = statusItem.button else { return }
-        let icon = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: "GitHub Notifications")
+        let icon = NSImage(systemSymbolName: "tray.fill", accessibilityDescription: "GitHub Notifications")
         icon?.isTemplate = true
         button.image = icon
         button.imagePosition = .imageLeading
