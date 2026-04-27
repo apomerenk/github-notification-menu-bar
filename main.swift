@@ -9,6 +9,28 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
 
+// MARK: - Paste-friendly secure field
+//
+// NSSecureTextField inside an NSAlert accessoryView doesn't receive Cmd+V/C/X/A
+// because the alert window doesn't route key equivalents to the field. Forward
+// them to the standard responder chain ourselves.
+
+final class PasteableSecureTextField: NSSecureTextField {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+            switch event.charactersIgnoringModifiers {
+            case "v": if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) { return true }
+            case "c": if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) { return true }
+            case "x": if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) { return true }
+            case "a": if NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: self) { return true }
+            case "z": if NSApp.sendAction(Selector(("undo:")), to: nil, from: self) { return true }
+            default: break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -61,12 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let alert = NSAlert()
         alert.messageText = "GitHub Personal Access Token"
         alert.informativeText = "Create one at github.com/settings/tokens with the 'notifications' scope (or a fine-grained token with Notifications: read).\n\nStored at ~/.config/gh-notif-bar/token (0600)."
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        let field = PasteableSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.stringValue = token ?? ""
         alert.accessoryView = field
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
+        alert.window.initialFirstResponder = field
         if alert.runModal() == .alertFirstButtonReturn {
             let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             do {
