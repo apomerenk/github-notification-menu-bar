@@ -258,6 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 }
                 return
             }
+            let unreadCount = arr.filter { ($0["unread"] as? Bool) ?? true }.count
+            let readCount = arr.count - unreadCount
+            self.log("Notifications fetch: status=\(http.statusCode), total=\(arr.count) (unread=\(unreadCount), read=\(readCount))")
             DispatchQueue.main.async { self.handle(notifications: arr) }
         }.resume()
     }
@@ -326,6 +329,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 self.log("PR bad response: status=\(status) body=\(snippet)")
                 return
             }
+            let totalCount = (json["total_count"] as? Int) ?? items.count
+            self.log("PR fetch: status=\(http.statusCode), items=\(items.count), total_count=\(totalCount)")
             DispatchQueue.main.async {
                 self.latestPRs = items
                 self.rebuildMenu()
