@@ -280,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
         latestUnread = unread
         latestRead = read
-        renderBadge(state: .count(unread.count))
+        updateBadge()
         rebuildMenu()
 
         let currentIDs = Set(unread.compactMap { $0["id"] as? String })
@@ -333,9 +333,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             self.log("PR fetch: status=\(http.statusCode), items=\(items.count), total_count=\(totalCount)")
             DispatchQueue.main.async {
                 self.latestPRs = items
+                self.updateBadge()
                 self.rebuildMenu()
             }
         }.resume()
+    }
+
+    private func updateBadge() {
+        let total = latestUnread.count + latestPRs.count
+        renderBadge(state: .count(total))
     }
 
     // MARK: Menu rebuild
@@ -369,12 +375,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
 
         if !prRows.isEmpty {
-            for item in prRows.reversed() {
-                let menuItem = makePRItem(item)
-                menuItem.tag = Self.notificationItemTag
-                menu.insertItem(menuItem, at: 0)
+            let drafts = prRows.filter { ($0["draft"] as? Bool) == true }
+            let ready = prRows.filter { ($0["draft"] as? Bool) != true }
+
+            // Inserting at position 0 in reverse of intended final order:
+            // ready header → ready rows → drafts header → draft rows.
+            if !drafts.isEmpty {
+                for item in drafts.reversed() {
+                    let menuItem = makePRItem(item)
+                    menuItem.tag = Self.notificationItemTag
+                    menu.insertItem(menuItem, at: 0)
+                }
+                let draftsHeader = NSMenuItem(title: "Drafts", action: nil, keyEquivalent: "")
+                draftsHeader.isEnabled = false
+                draftsHeader.tag = Self.notificationItemTag
+                menu.insertItem(draftsHeader, at: 0)
             }
-            let header = NSMenuItem(title: "Needs your review", action: nil, keyEquivalent: "")
+
+            if !ready.isEmpty {
+                for item in ready.reversed() {
+                    let menuItem = makePRItem(item)
+                    menuItem.tag = Self.notificationItemTag
+                    menu.insertItem(menuItem, at: 0)
+                }
+            }
+
+            let header = NSMenuItem(title: ready.isEmpty ? "Needs your review (drafts)" : "Needs your review", action: nil, keyEquivalent: "")
             header.isEnabled = false
             header.tag = Self.notificationItemTag
             menu.insertItem(header, at: 0)
