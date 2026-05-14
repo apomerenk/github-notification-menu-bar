@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var latestUnread: [[String: Any]] = []
     private var latestRead: [[String: Any]] = []
     private var latestPRs: [[String: Any]] = []
+    private var latestAuthored: [[String: Any]] = []
 
     private var logEntries: [(Date, String)] = []
     private static let logEntriesLimit = 500
@@ -221,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     @objc private func refreshAll() {
         refresh()
         refreshPRs()
+        refreshAuthoredPRs()
     }
 
     @objc private func refresh() {
@@ -302,12 +304,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     // MARK: PR fetching
 
     @objc private func refreshPRs() {
+        searchPRs(query: "is:pr is:open review-requested:@me", label: "review-requested") { [weak self] items in
+            guard let self else { return }
+            self.latestPRs = items
+            self.updateBadge()
+            self.rebuildMenu()
+        }
+    }
+
+    @objc private func refreshAuthoredPRs() {
+        searchPRs(query: "is:pr is:open author:@me", label: "authored") { [weak self] items in
+            guard let self else { return }
+            self.latestAuthored = items
+            self.rebuildMenu()
+        }
+    }
+
+    private func searchPRs(query: String, label: String, completion: @escaping ([[String: Any]]) -> Void) {
         guard prFetchEnabled, let token = token, !token.isEmpty else {
-            latestPRs = []
-            rebuildMenu()
+            DispatchQueue.main.async { completion([]) }
             return
         }
-        var req = URLRequest(url: URL(string: "https://api.github.com/search/issues?q=is:pr+is:open+review-requested:@me&per_page=20")!)
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.github.com/search/issues?q=\(encoded)&per_page=30") else {
+            return
+        }
+
+        var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -317,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
             if let err = err {
-                self.log("PR fetch error: \(err.localizedDescription)")
+                self.log("PR fetch (\(label)) error: \(err.localizedDescription)")
                 return
             }
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
@@ -326,16 +349,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                   let items = json["items"] as? [[String: Any]] else {
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
                 let snippet = (data.flatMap { String(data: $0, encoding: .utf8) }?.prefix(200)).map(String.init) ?? ""
-                self.log("PR bad response: status=\(status) body=\(snippet)")
+                self.log("PR bad response (\(label)): status=\(status) body=\(snippet)")
                 return
             }
             let totalCount = (json["total_count"] as? Int) ?? items.count
-            self.log("PR fetch: status=\(http.statusCode), items=\(items.count), total_count=\(totalCount)")
-            DispatchQueue.main.async {
-                self.latestPRs = items
-                self.updateBadge()
-                self.rebuildMenu()
-            }
+            self.log("PR fetch (\(label)): status=\(http.statusCode), items=\(items.count), total_count=\(totalCount)")
+            DispatchQueue.main.async { completion(items) }
         }.resume()
     }
 
@@ -355,8 +374,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
         let unreadRows = Array(latestUnread.prefix(15))
         let readRows = Array(latestRead.prefix(10))
-        let prRows = Array(latestPRs.prefix(15))
-        guard !unreadRows.isEmpty || !readRows.isEmpty || !prRows.isEmpty else { return }
+        let reviewRows = Array(latestPRs.prefix(15))
+        let authoredRows = Array(latestAuthored.prefix(15))
+        guard !unreadRows.isEmpty || !readRows.isEmpty || !reviewRows.isEmpty || !authoredRows.isEmpty else { return }
 
         // Inserting at position 0 in reverse of intended final order.
         let separator = NSMenuItem.separator()
@@ -374,43 +394,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             menu.insertItem(parent, at: 0)
         }
 
-        if !prRows.isEmpty {
-            let drafts = prRows.filter { ($0["draft"] as? Bool) == true }
-            let ready = prRows.filter { ($0["draft"] as? Bool) != true }
+        // Authored PRs section (below review-requested in final order, so insert first).
+        insertPRSection(authoredRows, readyHeader: "Your PRs", draftsHeader: "Your drafts", into: menu)
 
-            // Inserting at position 0 in reverse of intended final order:
-            // ready header → ready rows → drafts header → draft rows.
-            if !drafts.isEmpty {
-                for item in drafts.reversed() {
-                    let menuItem = makePRItem(item)
-                    menuItem.tag = Self.notificationItemTag
-                    menu.insertItem(menuItem, at: 0)
-                }
-                let draftsHeader = NSMenuItem(title: "Drafts", action: nil, keyEquivalent: "")
-                draftsHeader.isEnabled = false
-                draftsHeader.tag = Self.notificationItemTag
-                menu.insertItem(draftsHeader, at: 0)
-            }
-
-            if !ready.isEmpty {
-                for item in ready.reversed() {
-                    let menuItem = makePRItem(item)
-                    menuItem.tag = Self.notificationItemTag
-                    menu.insertItem(menuItem, at: 0)
-                }
-            }
-
-            let header = NSMenuItem(title: ready.isEmpty ? "Needs your review (drafts)" : "Needs your review", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            header.tag = Self.notificationItemTag
-            menu.insertItem(header, at: 0)
-        }
+        // Review-requested PRs section.
+        insertPRSection(reviewRows, readyHeader: "Needs your review", draftsHeader: "Drafts", into: menu)
 
         for n in unreadRows.reversed() {
             let item = makeNotificationItem(n)
             item.tag = Self.notificationItemTag
             menu.insertItem(item, at: 0)
         }
+    }
+
+    private func insertPRSection(_ rows: [[String: Any]], readyHeader: String, draftsHeader: String, into menu: NSMenu) {
+        guard !rows.isEmpty else { return }
+        let drafts = rows.filter { ($0["draft"] as? Bool) == true }
+        let ready = rows.filter { ($0["draft"] as? Bool) != true }
+
+        if !drafts.isEmpty {
+            for item in drafts.reversed() {
+                let menuItem = makePRItem(item)
+                menuItem.tag = Self.notificationItemTag
+                menu.insertItem(menuItem, at: 0)
+            }
+            let h = NSMenuItem(title: draftsHeader, action: nil, keyEquivalent: "")
+            h.isEnabled = false
+            h.tag = Self.notificationItemTag
+            menu.insertItem(h, at: 0)
+        }
+
+        if !ready.isEmpty {
+            for item in ready.reversed() {
+                let menuItem = makePRItem(item)
+                menuItem.tag = Self.notificationItemTag
+                menu.insertItem(menuItem, at: 0)
+            }
+        }
+
+        let topHeader = NSMenuItem(title: ready.isEmpty ? "\(readyHeader) (drafts)" : readyHeader, action: nil, keyEquivalent: "")
+        topHeader.isEnabled = false
+        topHeader.tag = Self.notificationItemTag
+        menu.insertItem(topHeader, at: 0)
     }
 
     private func makePRItem(_ item: [String: Any]) -> NSMenuItem {
@@ -552,7 +577,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         header += "poll interval:   \(Int(pollIntervalSeconds))s\n"
         header += "latest unread:   \(latestUnread.count)\n"
         header += "latest read:     \(latestRead.count)\n"
-        header += "latest PRs:      \(latestPRs.count)\n"
+        header += "latest review-requested PRs: \(latestPRs.count)\n"
+        header += "latest authored PRs:         \(latestAuthored.count)\n"
         header += "\n=== Recent log entries (most recent last, max \(Self.logEntriesLimit)) ===\n"
 
         let body = logEntries.map { (date, msg) in
