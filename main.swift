@@ -92,9 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let alert = NSAlert()
         alert.messageText = "GitHub Personal Access Token"
         alert.informativeText = """
-        Needs a classic PAT with the 'notifications' scope, or a fine-grained PAT with 'Notifications: read'.
+        Needs a classic PAT with the 'notifications' scope. Fine-grained PATs do not currently expose notifications.
 
-        Click 'Create Token…' to open GitHub's classic-token page with the 'notifications' scope pre-selected — just hit Generate and paste the result here. For a fine-grained token, open github.com/settings/personal-access-tokens/new and enable 'Notifications: read' under Account permissions.
+        Click 'Create Token…' to open GitHub's classic-token page with the right scope pre-selected — hit Generate and paste the result here.
 
         Stored at ~/.config/gh-notif-bar/token (0600).
         """
