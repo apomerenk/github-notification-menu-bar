@@ -293,27 +293,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         icon?.isTemplate = true
         button.image = icon
         button.imagePosition = .imageLeading
+        statusItem.isVisible = true
         switch state {
         case .idle:
             button.title = ""
-            statusItem.isVisible = true
         case .count(let n):
             button.title = n == 0 ? "" : " \(n)"
-            statusItem.isVisible = n > 0
         case .error:
             button.title = " !"
-            statusItem.isVisible = true
         case .needsToken:
             button.title = " ?"
-            statusItem.isVisible = true
         }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Re-launching the app (open from Finder/Spotlight) forces the icon
-        // visible so the user can access the menu when count is 0.
-        statusItem.isVisible = true
-        return true
     }
 
     // MARK: Notifications

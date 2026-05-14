@@ -7,7 +7,7 @@ A tiny macOS menu bar app that shows your GitHub unread-notifications count and 
 ## How it works
 
 - Polls `https://api.github.com/notifications` (default every 60s, honors GitHub's `X-Poll-Interval` header).
-- Menu bar shows a tray icon + unread count. Icon disappears entirely when the count is 0.
+- Menu bar shows a tray icon + unread count. Icon stays visible at 0; the count just hides.
 - New notifications fire macOS banner alerts. Clicking the banner — or the menu — opens [github.com/notifications](https://github.com/notifications).
 - Token lives at `~/.config/gh-notif-bar/token` (mode `0600`), entered via the menu's "Set Token…" item.
 - The first poll after launch is silent (it just seeds the seen-set) so you don't get a flood of banners on startup.
@@ -16,7 +16,7 @@ States shown in the menu bar:
 
 | Badge | Meaning |
 |---|---|
-| _hidden_ | 0 unread |
+| `📥` | 0 unread |
 | `📥 3` | 3 unread |
 | `📥 ?` | no token configured |
 | `📥 !` | network/API error (check Console for details) |
@@ -56,9 +56,7 @@ cp -R build/GitHubNotifications.app /Applications/
 
 1. macOS will ask permission to send notifications — allow.
 2. A token dialog appears. Paste your PAT and hit Save.
-3. The icon shows up if you have unread notifications. If you don't, mark something unread on github.com and click "Refresh Now" to confirm it's working.
-
-To get the menu back when the icon is hidden (count is 0), re-launch the app from Spotlight or Finder — `applicationShouldHandleReopen` forces it visible again.
+3. The icon appears in the menu bar. If everything is read, you'll see the bare tray glyph; the unread count appears beside it as soon as one arrives.
 
 ## Auto-launch on login
 
