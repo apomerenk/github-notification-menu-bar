@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var pollIntervalSeconds: TimeInterval = 60
     private var launchAtLoginItem: NSMenuItem!
 
+    // Dynamically inserted notification rows at the top of the menu carry this tag
+    // so we can remove the previous batch before inserting the next.
+    private static let notificationItemTag = 9001
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         renderBadge(state: .idle)
@@ -192,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private func handle(notifications: [[String: Any]]) {
         renderBadge(state: .count(notifications.count))
+        updateNotificationItems(notifications)
 
         let currentIDs = Set(notifications.compactMap { $0["id"] as? String })
         if hasFetchedOnce {
@@ -209,6 +214,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         hasFetchedOnce = true
     }
 
+    // MARK: Notification list in menu
+
+    private func updateNotificationItems(_ notifications: [[String: Any]]) {
+        guard let menu = statusItem.menu else { return }
+
+        while let first = menu.items.first, first.tag == Self.notificationItemTag {
+            menu.removeItem(first)
+        }
+
+        let rows = Array(notifications.prefix(15))
+        guard !rows.isEmpty else { return }
+
+        let separator = NSMenuItem.separator()
+        separator.tag = Self.notificationItemTag
+        menu.insertItem(separator, at: 0)
+
+        for n in rows.reversed() {
+            let subject = n["subject"] as? [String: Any] ?? [:]
+            let type = subject["type"] as? String ?? ""
+            let title = subject["title"] as? String ?? "Notification"
+            let repo = (n["repository"] as? [String: Any])?["full_name"] as? String ?? ""
+
+            let combined = repo.isEmpty ? title : "\(repo) — \(title)"
+            let truncated = combined.count > 70 ? String(combined.prefix(67)) + "…" : combined
+
+            let item = NSMenuItem(title: truncated, action: #selector(openNotificationItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Self.notificationItemTag
+            item.image = symbolImage(forSubjectType: type)
+            item.representedObject = htmlURL(fromSubject: subject).absoluteString
+            menu.insertItem(item, at: 0)
+        }
+    }
+
+    @objc private func openNotificationItem(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String, let url = URL(string: s) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func symbolImage(forSubjectType type: String) -> NSImage? {
+        let name: String
+        switch type {
+        case "PullRequest": name = "arrow.triangle.pull"
+        case "Issue":       name = "smallcircle.filled.circle"
+        case "Commit":      name = "doc.text"
+        case "Release":     name = "tag"
+        case "Discussion":  name = "bubble.left"
+        case "CheckSuite":  name = "checkmark.seal"
+        default:            name = "circle"
+        }
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: type)
+        img?.isTemplate = true
+        return img
+    }
+
+    private func htmlURL(fromSubject subject: [String: Any]) -> URL {
+        let fallback = URL(string: "https://github.com/notifications")!
+        guard let apiURL = subject["url"] as? String else { return fallback }
+        var s = apiURL.replacingOccurrences(of: "https://api.github.com/repos/", with: "https://github.com/")
+        s = s.replacingOccurrences(of: "/pulls/", with: "/pull/")
+        s = s.replacingOccurrences(of: "/commits/", with: "/commit/")
+        return URL(string: s) ?? fallback
+    }
+
     // MARK: Badge
 
     private enum BadgeState {
@@ -224,27 +293,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         icon?.isTemplate = true
         button.image = icon
         button.imagePosition = .imageLeading
+        statusItem.isVisible = true
         switch state {
         case .idle:
             button.title = ""
-            statusItem.isVisible = true
         case .count(let n):
             button.title = n == 0 ? "" : " \(n)"
-            statusItem.isVisible = n > 0
         case .error:
             button.title = " !"
-            statusItem.isVisible = true
         case .needsToken:
             button.title = " ?"
-            statusItem.isVisible = true
         }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Re-launching the app (open from Finder/Spotlight) forces the icon
-        // visible so the user can access the menu when count is 0.
-        statusItem.isVisible = true
-        return true
     }
 
     // MARK: Notifications

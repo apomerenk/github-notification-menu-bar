@@ -13,6 +13,9 @@ mkdir -p "$BUILD_DIR/$APP_BUNDLE/Contents/Resources"
 
 cp Info.plist "$BUILD_DIR/$APP_BUNDLE/Contents/Info.plist"
 
+# Generate the app icon from the SF Symbol used in the menu bar.
+swift make_icon.swift "$BUILD_DIR/$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
 swiftc -O \
     -framework AppKit \
     -framework UserNotifications \
