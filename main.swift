@@ -151,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             renderBadge(state: .needsToken)
             return
         }
-        var req = URLRequest(url: URL(string: "https://api.github.com/notifications")!)
+        var req = URLRequest(url: URL(string: "https://api.github.com/notifications?all=true")!)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -195,12 +195,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     private func handle(notifications: [[String: Any]]) {
-        renderBadge(state: .count(notifications.count))
-        updateNotificationItems(notifications)
+        let unread = notifications.filter { ($0["unread"] as? Bool) ?? true }
+        let read = notifications.filter { ($0["unread"] as? Bool) == false }
 
-        let currentIDs = Set(notifications.compactMap { $0["id"] as? String })
+        renderBadge(state: .count(unread.count))
+        updateNotificationItems(unread: unread, read: read)
+
+        let currentIDs = Set(unread.compactMap { $0["id"] as? String })
         if hasFetchedOnce {
-            for n in notifications {
+            for n in unread {
                 guard let id = n["id"] as? String, !seenIDs.contains(id) else { continue }
                 let subject = n["subject"] as? [String: Any]
                 let title = (subject?["title"] as? String) ?? "New notification"
@@ -216,36 +219,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     // MARK: Notification list in menu
 
-    private func updateNotificationItems(_ notifications: [[String: Any]]) {
+    private func updateNotificationItems(unread: [[String: Any]], read: [[String: Any]]) {
         guard let menu = statusItem.menu else { return }
 
         while let first = menu.items.first, first.tag == Self.notificationItemTag {
             menu.removeItem(first)
         }
 
-        let rows = Array(notifications.prefix(15))
-        guard !rows.isEmpty else { return }
+        let unreadRows = Array(unread.prefix(15))
+        let readRows = Array(read.prefix(10))
+        guard !unreadRows.isEmpty || !readRows.isEmpty else { return }
 
         let separator = NSMenuItem.separator()
         separator.tag = Self.notificationItemTag
         menu.insertItem(separator, at: 0)
 
-        for n in rows.reversed() {
-            let subject = n["subject"] as? [String: Any] ?? [:]
-            let type = subject["type"] as? String ?? ""
-            let title = subject["title"] as? String ?? "Notification"
-            let repo = (n["repository"] as? [String: Any])?["full_name"] as? String ?? ""
+        if !readRows.isEmpty {
+            let submenu = NSMenu(title: "Recently Read")
+            for n in readRows {
+                submenu.addItem(makeNotificationItem(n))
+            }
+            let parent = NSMenuItem(title: "Recently Read", action: nil, keyEquivalent: "")
+            parent.submenu = submenu
+            parent.tag = Self.notificationItemTag
+            menu.insertItem(parent, at: 0)
+        }
 
-            let combined = repo.isEmpty ? title : "\(repo) — \(title)"
-            let truncated = combined.count > 70 ? String(combined.prefix(67)) + "…" : combined
-
-            let item = NSMenuItem(title: truncated, action: #selector(openNotificationItem(_:)), keyEquivalent: "")
-            item.target = self
+        for n in unreadRows.reversed() {
+            let item = makeNotificationItem(n)
             item.tag = Self.notificationItemTag
-            item.image = symbolImage(forSubjectType: type)
-            item.representedObject = htmlURL(fromSubject: subject).absoluteString
             menu.insertItem(item, at: 0)
         }
+    }
+
+    private func makeNotificationItem(_ n: [String: Any]) -> NSMenuItem {
+        let subject = n["subject"] as? [String: Any] ?? [:]
+        let type = subject["type"] as? String ?? ""
+        let title = subject["title"] as? String ?? "Notification"
+        let repo = (n["repository"] as? [String: Any])?["full_name"] as? String ?? ""
+
+        let combined = repo.isEmpty ? title : "\(repo) — \(title)"
+        let truncated = combined.count > 70 ? String(combined.prefix(67)) + "…" : combined
+
+        let item = NSMenuItem(title: truncated, action: #selector(openNotificationItem(_:)), keyEquivalent: "")
+        item.target = self
+        item.image = symbolImage(forSubjectType: type)
+        item.representedObject = htmlURL(fromSubject: subject).absoluteString
+        return item
     }
 
     @objc private func openNotificationItem(_ sender: NSMenuItem) {
