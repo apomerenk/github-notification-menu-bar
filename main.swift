@@ -91,15 +91,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     @objc private func setToken() {
         let alert = NSAlert()
         alert.messageText = "GitHub Personal Access Token"
-        alert.informativeText = "Create one at github.com/settings/tokens with the 'notifications' scope (or a fine-grained token with Notifications: read).\n\nStored at ~/.config/gh-notif-bar/token (0600)."
+        alert.informativeText = """
+        Needs a classic PAT with the 'notifications' scope. Fine-grained PATs do not currently expose notifications.
+
+        Click 'Create Token…' to open GitHub's classic-token page with the right scope pre-selected — hit Generate and paste the result here.
+
+        Stored at ~/.config/gh-notif-bar/token (0600).
+        """
         let field = PasteableSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.stringValue = token ?? ""
         alert.accessoryView = field
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Create Token…")
         NSApp.activate(ignoringOtherApps: true)
         alert.window.initialFirstResponder = field
-        if alert.runModal() == .alertFirstButtonReturn {
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
             let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             do {
                 try value.write(to: tokenURL(), atomically: true, encoding: .utf8)
@@ -111,6 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             } catch {
                 NSLog("Failed to save token: \(error)")
             }
+        case .alertThirdButtonReturn:
+            let createURL = URL(string: "https://github.com/settings/tokens/new?scopes=notifications&description=GitHub%20Notifications%20menu%20bar")!
+            NSWorkspace.shared.open(createURL)
+            DispatchQueue.main.async { self.setToken() }
+        default:
+            break
         }
     }
 

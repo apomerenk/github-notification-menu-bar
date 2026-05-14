@@ -27,7 +27,7 @@ States shown in the menu bar:
 
 - macOS 13+
 - Xcode command line tools (`xcode-select --install`) — only needed if building from source
-- A GitHub personal access token with the `notifications` scope (classic), or a fine-grained token with **Notifications: read**
+- A GitHub **classic** personal access token with the `notifications` scope. Fine-grained PATs don't currently expose notifications — the dialog will give you a one-click link to create the right kind.
 
 ### Install via Homebrew
 
