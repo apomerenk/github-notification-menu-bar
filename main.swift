@@ -134,40 +134,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let alert = NSAlert()
         alert.messageText = "GitHub Tokens"
         alert.informativeText = """
-        Two separate tokens, each scoped to one endpoint:
+        Two classic personal access tokens, each used for one endpoint:
 
-        • Notifications — classic PAT with 'notifications' scope.
-        • Pull requests — classic PAT with 'repo' scope. (Broader than ideal, but it's the only classic scope that includes private PR read. Fine-grained PATs work too if your org allows them — they need 'Pull requests: read' + 'Metadata: read'.)
+        • Notifications powers the unread + recently-read rows at the top of the menu and the new-notification banner alerts.
+        • Pull requests powers the 'Needs your review' section.
 
-        If you belong to an SSO org, click 'Configure SSO' next to each token on github.com/settings/tokens after generating, to authorize it for the org. Tokens are stored at ~/.config/gh-notif-bar/ (mode 0600).
+        Click Create… next to each field to open GitHub's token page with the right scope pre-ticked, then paste back here. For org SSO, click 'Configure SSO' next to each token on github.com/settings/tokens after generating. Tokens are stored at ~/.config/gh-notif-bar/ (mode 0600).
         """
 
-        let containerWidth: CGFloat = 440
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 120))
+        let containerWidth: CGFloat = 460
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 154))
 
-        let notifLabel = NSTextField(labelWithString: "Notifications (classic):")
-        notifLabel.frame = NSRect(x: 0, y: 96, width: containerWidth, height: 16)
-        container.addSubview(notifLabel)
+        // Notifications row
+        let notifCheckbox = NSButton(checkboxWithTitle: "Classic PAT — 'notifications' scope", target: self, action: #selector(keepCheckboxOn(_:)))
+        notifCheckbox.state = .on
+        notifCheckbox.frame = NSRect(x: 0, y: 130, width: containerWidth, height: 18)
+        container.addSubview(notifCheckbox)
 
-        let notifField = PasteableSecureTextField(frame: NSRect(x: 0, y: 64, width: 320, height: 24))
+        let notifField = PasteableSecureTextField(frame: NSRect(x: 0, y: 98, width: 340, height: 24))
         notifField.stringValue = notificationsToken ?? ""
         container.addSubview(notifField)
 
         let notifBtn = NSButton(title: "Create…", target: self, action: #selector(openCreateNotificationsTokenURL))
-        notifBtn.frame = NSRect(x: 332, y: 62, width: 100, height: 28)
+        notifBtn.frame = NSRect(x: 352, y: 96, width: 100, height: 28)
         notifBtn.bezelStyle = .rounded
         container.addSubview(notifBtn)
 
-        let prLabel = NSTextField(labelWithString: "Pull requests (classic 'repo' or fine-grained):")
-        prLabel.frame = NSRect(x: 0, y: 32, width: containerWidth, height: 16)
-        container.addSubview(prLabel)
+        // PR row
+        let prCheckbox = NSButton(checkboxWithTitle: "Classic PAT — 'repo' scope", target: self, action: #selector(keepCheckboxOn(_:)))
+        prCheckbox.state = .on
+        prCheckbox.frame = NSRect(x: 0, y: 58, width: containerWidth, height: 18)
+        container.addSubview(prCheckbox)
 
-        let prField = PasteableSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        let prField = PasteableSecureTextField(frame: NSRect(x: 0, y: 26, width: 340, height: 24))
         prField.stringValue = prToken ?? ""
         container.addSubview(prField)
 
         let prBtn = NSButton(title: "Create…", target: self, action: #selector(openCreatePRTokenURL))
-        prBtn.frame = NSRect(x: 332, y: -2, width: 100, height: 28)
+        prBtn.frame = NSRect(x: 352, y: 24, width: 100, height: 28)
         prBtn.bezelStyle = .rounded
         container.addSubview(prBtn)
 
@@ -197,6 +201,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             hasFetchedOnce = false
             refreshAll()
         }
+    }
+
+    // The checkboxes in the Set Tokens dialog are informational ("here's what scope this row
+    // expects"), not interactive. NSButton always toggles on click, so re-pin to .on.
+    @objc private func keepCheckboxOn(_ sender: NSButton) {
+        sender.state = .on
     }
 
     // MARK: Actions

@@ -9,9 +9,9 @@ A tiny macOS menu bar app that shows your GitHub unread-notifications count and 
 - Polls `https://api.github.com/notifications` (default every 60s, honors GitHub's `X-Poll-Interval` header).
 - Menu bar shows a tray icon + unread count. Icon stays visible at 0; the count just hides.
 - New notifications fire macOS banner alerts. Clicking the banner — or the menu — opens [github.com/notifications](https://github.com/notifications).
-- Two tokens, each at `~/.config/gh-notif-bar/` (mode `0600`), entered via the menu's "Set Tokens…" item:
-  - `notifications_token` — classic PAT, `notifications` scope (for unread/read rows + banners)
-  - `pr_token` — classic PAT with `repo` scope, or a fine-grained PAT with `Pull requests: read` + `Metadata: read` (for the "Needs your review" section). Classic + `repo` is broader but works for org repos out of the box; fine-grained needs org admin approval.
+- Two classic personal access tokens, each at `~/.config/gh-notif-bar/` (mode `0600`), entered via the menu's "Set Tokens…" item:
+  - `notifications_token` — `notifications` scope. Powers the unread/read rows and banner alerts.
+  - `pr_token` — `repo` scope. Powers the "Needs your review" section.
 - The first poll after launch is silent (it just seeds the seen-set) so you don't get a flood of banners on startup.
 
 States shown in the menu bar:
@@ -30,7 +30,7 @@ States shown in the menu bar:
 - macOS 13+
 - Xcode command line tools (`xcode-select --install`) — only needed if building from source
 - A GitHub **classic** PAT with the `notifications` scope (required for the notifications list + banners).
-- Optionally a second PAT for the "Needs your review" section — easiest is a **classic** PAT with `repo` scope (broad but works without admin help), or a **fine-grained** PAT with `Pull requests: read` + `Metadata: read` if your org allows fine-grained PATs. Without this token, the PR section is just hidden — notifications still work.
+- Optionally a second **classic** PAT with the `repo` scope (enables the "Needs your review" section). Without it the PR section is just hidden — notifications still work. For SSO orgs, click "Configure SSO" next to each token on github.com/settings/tokens after generating, to authorize for the org.
 
 ### Install via Homebrew
 
