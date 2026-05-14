@@ -123,8 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     @objc private func openCreatePRTokenURL() {
-        // Fine-grained PATs are created from the same root page; no URL params pre-select permissions.
-        let url = URL(string: "https://github.com/settings/personal-access-tokens/new")!
+        // Classic PAT with `repo` scope. Broader than ideal, but it's the only classic scope
+        // that includes private PR read, and fine-grained PATs need per-org admin approval
+        // (which most orgs don't grant freely).
+        let url = URL(string: "https://github.com/settings/tokens/new?scopes=repo&description=GitHub%20Notifications%20menu%20bar%20-%20PRs")!
         NSWorkspace.shared.open(url)
     }
 
@@ -135,9 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         Two separate tokens, each scoped to one endpoint:
 
         • Notifications — classic PAT with 'notifications' scope.
-        • Pull requests — fine-grained PAT with 'Pull requests: read' on the relevant repos (plus 'Metadata: read').
+        • Pull requests — classic PAT with 'repo' scope. (Broader than ideal, but it's the only classic scope that includes private PR read. Fine-grained PATs work too if your org allows them — they need 'Pull requests: read' + 'Metadata: read'.)
 
-        Use the Create… buttons to open the right token page. Tokens are stored at ~/.config/gh-notif-bar/ (mode 0600).
+        If you belong to an SSO org, click 'Configure SSO' next to each token on github.com/settings/tokens after generating, to authorize it for the org. Tokens are stored at ~/.config/gh-notif-bar/ (mode 0600).
         """
 
         let containerWidth: CGFloat = 440
@@ -156,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         notifBtn.bezelStyle = .rounded
         container.addSubview(notifBtn)
 
-        let prLabel = NSTextField(labelWithString: "Pull requests (fine-grained):")
+        let prLabel = NSTextField(labelWithString: "Pull requests (classic 'repo' or fine-grained):")
         prLabel.frame = NSRect(x: 0, y: 32, width: containerWidth, height: 16)
         container.addSubview(prLabel)
 
