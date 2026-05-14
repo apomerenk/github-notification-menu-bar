@@ -9,7 +9,9 @@ A tiny macOS menu bar app that shows your GitHub unread-notifications count and 
 - Polls `https://api.github.com/notifications` (default every 60s, honors GitHub's `X-Poll-Interval` header).
 - Menu bar shows a tray icon + unread count. Icon stays visible at 0; the count just hides.
 - New notifications fire macOS banner alerts. Clicking the banner — or the menu — opens [github.com/notifications](https://github.com/notifications).
-- Token lives at `~/.config/gh-notif-bar/token` (mode `0600`), entered via the menu's "Set Token…" item.
+- Two tokens, each at `~/.config/gh-notif-bar/` (mode `0600`), entered via the menu's "Set Tokens…" item:
+  - `notifications_token` — classic PAT, `notifications` scope (for unread/read rows + banners)
+  - `pr_token` — fine-grained PAT with `Pull requests: read` + `Metadata: read` on the relevant repos (for the "Needs your review" section)
 - The first poll after launch is silent (it just seeds the seen-set) so you don't get a flood of banners on startup.
 
 States shown in the menu bar:
@@ -27,7 +29,8 @@ States shown in the menu bar:
 
 - macOS 13+
 - Xcode command line tools (`xcode-select --install`) — only needed if building from source
-- A GitHub **classic** personal access token with the `notifications` scope. Fine-grained PATs don't currently expose notifications — the dialog will give you a one-click link to create the right kind.
+- A GitHub **classic** PAT with the `notifications` scope (required for the notifications list + banners).
+- Optionally a **fine-grained** PAT with `Pull requests: read` + `Metadata: read` on the repos you care about (enables the "Needs your review" section). Without it, that section is just hidden — notifications still work.
 
 ### Install via Homebrew
 
