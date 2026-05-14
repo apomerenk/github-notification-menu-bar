@@ -48,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var latestRead: [[String: Any]] = []
     private var latestPRs: [[String: Any]] = []
 
+    private var logEntries: [(Date, String)] = []
+    private static let logEntriesLimit = 500
+    private var logWindow: NSWindow?
+    private var logTextView: NSTextView?
+
     // Dynamically inserted notification rows at the top of the menu carry this tag
     // so we can remove the previous batch before inserting the next.
     private static let notificationItemTag = 9001
@@ -60,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.delegate = self
         menu.addItem(withTitle: "Open GitHub Notifications", action: #selector(openNotifications), keyEquivalent: "o")
         menu.addItem(withTitle: "Refresh Now", action: #selector(refreshAll), keyEquivalent: "r")
+        menu.addItem(withTitle: "Show Logs…", action: #selector(showLogs), keyEquivalent: "l")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Set Tokens…", action: #selector(setTokens), keyEquivalent: ",")
         launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -177,13 +183,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 try writeToken(notifValue, to: notificationsTokenURL())
                 notificationsToken = notifValue
             } catch {
-                NSLog("Failed to save notifications token: \(error)")
+                self.log("Failed to save notifications token: \(error)")
             }
             do {
                 try writeToken(prValue, to: prTokenURL())
                 prToken = prValue
             } catch {
-                NSLog("Failed to save PR token: \(error)")
+                self.log("Failed to save PR token: \(error)")
             }
             seenIDs.removeAll()
             hasFetchedOnce = false
@@ -208,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 try svc.register()
             }
         } catch {
-            NSLog("Launch-at-login toggle failed: \(error)")
+            log("Launch-at-login toggle failed: \(error)")
         }
     }
 
@@ -243,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
             if let err = err {
-                NSLog("Fetch error: \(err)")
+                self.log("Notifications fetch error: \(err.localizedDescription)")
                 DispatchQueue.main.async { self.renderBadge(state: .error) }
                 return
             }
@@ -257,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
             guard (200..<300).contains(http.statusCode), let data = data,
                   let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                NSLog("Bad response: status=\(http.statusCode)")
+                self.log("Notifications bad response: status=\(http.statusCode)")
                 DispatchQueue.main.async {
                     self.renderBadge(state: http.statusCode == 401 ? .needsToken : .error)
                 }
@@ -319,14 +325,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
             if let err = err {
-                NSLog("PR fetch error: \(err)")
+                self.log("PR fetch error: \(err.localizedDescription)")
                 return
             }
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                   let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let items = json["items"] as? [[String: Any]] else {
-                NSLog("PR bad response: status=\((resp as? HTTPURLResponse)?.statusCode ?? -1)")
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                let snippet = (data.flatMap { String(data: $0, encoding: .utf8) }?.prefix(200)).map(String.init) ?? ""
+                self.log("PR bad response: status=\(status) body=\(snippet)")
                 return
             }
             DispatchQueue.main.async {
@@ -450,6 +458,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         s = s.replacingOccurrences(of: "/pulls/", with: "/pull/")
         s = s.replacingOccurrences(of: "/commits/", with: "/commit/")
         return URL(string: s) ?? fallback
+    }
+
+    // MARK: Logs
+
+    private func log(_ message: String) {
+        NSLog("%@", message)
+        let entry = (Date(), message)
+        DispatchQueue.main.async {
+            self.logEntries.append(entry)
+            if self.logEntries.count > Self.logEntriesLimit {
+                self.logEntries.removeFirst(self.logEntries.count - Self.logEntriesLimit)
+            }
+            if self.logWindow?.isVisible == true {
+                self.refreshLogView()
+            }
+        }
+    }
+
+    @objc private func showLogs() {
+        if logWindow == nil {
+            let win = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 460),
+                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                backing: .buffered, defer: false
+            )
+            win.title = "GitHubNotifications — Logs"
+            win.isReleasedWhenClosed = false
+            win.center()
+
+            let contentView = win.contentView!
+            let scrollView = NSScrollView(frame: contentView.bounds)
+            scrollView.hasVerticalScroller = true
+            scrollView.hasHorizontalScroller = false
+            scrollView.autohidesScrollers = false
+            scrollView.autoresizingMask = [.width, .height]
+            scrollView.borderType = .noBorder
+
+            let textView = NSTextView(frame: scrollView.bounds)
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            textView.autoresizingMask = .width
+            textView.minSize = NSSize(width: 0, height: 0)
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.isVerticallyResizable = true
+            textView.isHorizontallyResizable = false
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainerInset = NSSize(width: 8, height: 8)
+
+            scrollView.documentView = textView
+            contentView.addSubview(scrollView)
+
+            logTextView = textView
+            logWindow = win
+        }
+
+        refreshLogView()
+        NSApp.activate(ignoringOtherApps: true)
+        logWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func refreshLogView() {
+        guard let textView = logTextView else { return }
+
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm:ss"
+        let nowStamp = fmt.string(from: Date())
+
+        let notifMask = tokenMask(notificationsToken)
+        let prMask = tokenMask(prToken)
+
+        var header = "=== gh-notif-bar diagnostic — \(nowStamp) ===\n"
+        header += "notifications token: \(notifMask)\n"
+        header += "pr token:            \(prMask)\n"
+        header += "poll interval:       \(Int(pollIntervalSeconds))s\n"
+        header += "latest unread:       \(latestUnread.count)\n"
+        header += "latest read:         \(latestRead.count)\n"
+        header += "latest PRs:          \(latestPRs.count)\n"
+        header += "\n=== Recent log entries (most recent last, max \(Self.logEntriesLimit)) ===\n"
+
+        let body = logEntries.map { (date, msg) in
+            "\(fmt.string(from: date))  \(msg)"
+        }.joined(separator: "\n")
+
+        textView.string = header + (body.isEmpty ? "(no entries yet)" : body)
+        textView.scrollToEndOfDocument(nil)
+    }
+
+    private func tokenMask(_ token: String?) -> String {
+        guard let t = token, !t.isEmpty else { return "missing" }
+        let last = t.suffix(4)
+        return "present (\(t.count) chars, ...\(last))"
     }
 
     // MARK: Badge
