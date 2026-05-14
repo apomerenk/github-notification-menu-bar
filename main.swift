@@ -37,8 +37,8 @@ final class PasteableSecureTextField: NSSecureTextField {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
-    private var notificationsToken: String?
-    private var prToken: String?
+    private var token: String?
+    private var prFetchEnabled: Bool = false
     private var seenIDs = Set<String>()
     private var hasFetchedOnce = false
     private var pollIntervalSeconds: TimeInterval = 60
@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.addItem(withTitle: "Refresh Now", action: #selector(refreshAll), keyEquivalent: "r")
         menu.addItem(withTitle: "Show Logs…", action: #selector(showLogs), keyEquivalent: "l")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "Set Tokens…", action: #selector(setTokens), keyEquivalent: ",")
+        menu.addItem(withTitle: "Set Token…", action: #selector(setTokens), keyEquivalent: ",")
         launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         menu.addItem(launchAtLoginItem)
         menu.addItem(NSMenuItem.separator())
@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         loadTokens()
-        if (notificationsToken ?? "").isEmpty && (prToken ?? "").isEmpty {
+        if (token ?? "").isEmpty {
             DispatchQueue.main.async { self.setTokens() }
         }
         startPolling()
@@ -93,23 +93,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         return dir
     }
 
-    private func notificationsTokenURL() -> URL { configDir().appendingPathComponent("notifications_token") }
-    private func prTokenURL() -> URL { configDir().appendingPathComponent("pr_token") }
-    private func legacyTokenURL() -> URL { configDir().appendingPathComponent("token") }
+    private func tokenURL() -> URL { configDir().appendingPathComponent("token") }
+    private static let prFetchEnabledKey = "prFetchEnabled"
 
     private func loadTokens() {
-        let legacy = legacyTokenURL()
-        let notif = notificationsTokenURL()
         let fm = FileManager.default
-        if fm.fileExists(atPath: legacy.path) && !fm.fileExists(atPath: notif.path) {
-            try? fm.moveItem(at: legacy, to: notif)
+
+        // Migrate from the short-lived two-file layout (notifications_token + pr_token):
+        // copy notifications_token into 'token' if it's the only one present, infer
+        // prFetchEnabled from the existence of a non-empty pr_token, then clean up.
+        let notifLegacy = configDir().appendingPathComponent("notifications_token")
+        let prLegacy = configDir().appendingPathComponent("pr_token")
+        if fm.fileExists(atPath: notifLegacy.path) && !fm.fileExists(atPath: tokenURL().path) {
+            try? fm.moveItem(at: notifLegacy, to: tokenURL())
         }
-        if let s = try? String(contentsOf: notif, encoding: .utf8) {
-            notificationsToken = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let s = try? String(contentsOf: prLegacy, encoding: .utf8),
+           !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            UserDefaults.standard.set(true, forKey: Self.prFetchEnabledKey)
         }
-        if let s = try? String(contentsOf: prTokenURL(), encoding: .utf8) {
-            prToken = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? fm.removeItem(at: prLegacy)
+        try? fm.removeItem(at: notifLegacy)
+
+        if let s = try? String(contentsOf: tokenURL(), encoding: .utf8) {
+            token = s.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        prFetchEnabled = UserDefaults.standard.bool(forKey: Self.prFetchEnabledKey)
     }
 
     private func writeToken(_ value: String, to url: URL) throws {
@@ -117,96 +125,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    @objc private func openCreateNotificationsTokenURL() {
-        let url = URL(string: "https://github.com/settings/tokens/new?scopes=notifications&description=GitHub%20Notifications%20menu%20bar")!
-        NSWorkspace.shared.open(url)
-    }
-
-    @objc private func openCreatePRTokenURL() {
-        // Classic PAT with `repo` scope. Broader than ideal, but it's the only classic scope
-        // that includes private PR read, and fine-grained PATs need per-org admin approval
-        // (which most orgs don't grant freely).
-        let url = URL(string: "https://github.com/settings/tokens/new?scopes=repo&description=GitHub%20Notifications%20menu%20bar%20-%20PRs")!
+    @objc private func openCreateTokenURL() {
+        // Pre-tick both scopes the app might need. If the user only wants notifications
+        // they can untick 'repo' on the GitHub page before generating.
+        let url = URL(string: "https://github.com/settings/tokens/new?scopes=notifications,repo&description=GitHub%20Notifications%20menu%20bar")!
         NSWorkspace.shared.open(url)
     }
 
     @objc private func setTokens() {
         let alert = NSAlert()
-        alert.messageText = "GitHub Tokens"
+        alert.messageText = "GitHub Token"
         alert.informativeText = """
-        Two classic personal access tokens, each used for one endpoint:
+        One classic personal access token. The 'notifications' scope is required (powers the menu's unread/read rows and banner alerts). The 'repo' scope is optional — tick it on GitHub to also enable the 'Needs your review' PR section.
 
-        • Notifications powers the unread + recently-read rows at the top of the menu and the new-notification banner alerts.
-        • Pull requests powers the 'Needs your review' section.
+        Click Create… to open GitHub's token page with both scopes pre-ticked. After generating, paste the token below. If you generated it with 'repo' scope, also tick the checkbox so the app fetches PRs.
 
-        Click Create… next to each field to open GitHub's token page with the right scope pre-ticked, then paste back here. For org SSO, click 'Configure SSO' next to each token on github.com/settings/tokens after generating. Tokens are stored at ~/.config/gh-notif-bar/ (mode 0600).
+        For SSO orgs, click 'Configure SSO' next to the token on github.com/settings/tokens after generating, to authorize for the org. Stored at ~/.config/gh-notif-bar/token (mode 0600).
         """
 
         let containerWidth: CGFloat = 460
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 154))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 80))
 
-        // Notifications row
-        let notifCheckbox = NSButton(checkboxWithTitle: "Classic PAT — 'notifications' scope", target: self, action: #selector(keepCheckboxOn(_:)))
-        notifCheckbox.state = .on
-        notifCheckbox.frame = NSRect(x: 0, y: 130, width: containerWidth, height: 18)
-        container.addSubview(notifCheckbox)
+        let field = PasteableSecureTextField(frame: NSRect(x: 0, y: 52, width: 340, height: 24))
+        field.stringValue = token ?? ""
+        container.addSubview(field)
 
-        let notifField = PasteableSecureTextField(frame: NSRect(x: 0, y: 98, width: 340, height: 24))
-        notifField.stringValue = notificationsToken ?? ""
-        container.addSubview(notifField)
+        let createBtn = NSButton(title: "Create…", target: self, action: #selector(openCreateTokenURL))
+        createBtn.frame = NSRect(x: 352, y: 50, width: 100, height: 28)
+        createBtn.bezelStyle = .rounded
+        container.addSubview(createBtn)
 
-        let notifBtn = NSButton(title: "Create…", target: self, action: #selector(openCreateNotificationsTokenURL))
-        notifBtn.frame = NSRect(x: 352, y: 96, width: 100, height: 28)
-        notifBtn.bezelStyle = .rounded
-        container.addSubview(notifBtn)
-
-        // PR row
-        let prCheckbox = NSButton(checkboxWithTitle: "Classic PAT — 'repo' scope", target: self, action: #selector(keepCheckboxOn(_:)))
-        prCheckbox.state = .on
-        prCheckbox.frame = NSRect(x: 0, y: 58, width: containerWidth, height: 18)
-        container.addSubview(prCheckbox)
-
-        let prField = PasteableSecureTextField(frame: NSRect(x: 0, y: 26, width: 340, height: 24))
-        prField.stringValue = prToken ?? ""
-        container.addSubview(prField)
-
-        let prBtn = NSButton(title: "Create…", target: self, action: #selector(openCreatePRTokenURL))
-        prBtn.frame = NSRect(x: 352, y: 24, width: 100, height: 28)
-        prBtn.bezelStyle = .rounded
-        container.addSubview(prBtn)
+        let repoCheckbox = NSButton(checkboxWithTitle: "Token has 'repo' scope (enable Needs your review section)", target: nil, action: nil)
+        repoCheckbox.state = prFetchEnabled ? .on : .off
+        repoCheckbox.frame = NSRect(x: 0, y: 14, width: containerWidth, height: 18)
+        container.addSubview(repoCheckbox)
 
         alert.accessoryView = container
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
-        alert.window.initialFirstResponder = notifField
+        alert.window.initialFirstResponder = field
 
         if alert.runModal() == .alertFirstButtonReturn {
-            let notifValue = notifField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            let prValue = prField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
             do {
-                try writeToken(notifValue, to: notificationsTokenURL())
-                notificationsToken = notifValue
+                try writeToken(value, to: tokenURL())
+                token = value
             } catch {
-                self.log("Failed to save notifications token: \(error)")
+                self.log("Failed to save token: \(error)")
             }
-            do {
-                try writeToken(prValue, to: prTokenURL())
-                prToken = prValue
-            } catch {
-                self.log("Failed to save PR token: \(error)")
-            }
+
+            prFetchEnabled = (repoCheckbox.state == .on)
+            UserDefaults.standard.set(prFetchEnabled, forKey: Self.prFetchEnabledKey)
+
             seenIDs.removeAll()
             hasFetchedOnce = false
+            latestPRs = []
             refreshAll()
         }
-    }
-
-    // The checkboxes in the Set Tokens dialog are informational ("here's what scope this row
-    // expects"), not interactive. NSButton always toggles on click, so re-pin to .on.
-    @objc private func keepCheckboxOn(_ sender: NSButton) {
-        sender.state = .on
     }
 
     // MARK: Actions
@@ -247,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     @objc private func refresh() {
-        guard let token = notificationsToken, !token.isEmpty else {
+        guard let token = token, !token.isEmpty else {
             renderBadge(state: .needsToken)
             return
         }
@@ -322,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     // MARK: PR fetching
 
     @objc private func refreshPRs() {
-        guard let token = prToken, !token.isEmpty else {
+        guard prFetchEnabled, let token = token, !token.isEmpty else {
             latestPRs = []
             rebuildMenu()
             return
@@ -538,16 +515,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         fmt.dateFormat = "HH:mm:ss"
         let nowStamp = fmt.string(from: Date())
 
-        let notifMask = tokenMask(notificationsToken)
-        let prMask = tokenMask(prToken)
-
         var header = "=== gh-notif-bar diagnostic — \(nowStamp) ===\n"
-        header += "notifications token: \(notifMask)\n"
-        header += "pr token:            \(prMask)\n"
-        header += "poll interval:       \(Int(pollIntervalSeconds))s\n"
-        header += "latest unread:       \(latestUnread.count)\n"
-        header += "latest read:         \(latestRead.count)\n"
-        header += "latest PRs:          \(latestPRs.count)\n"
+        header += "token:           \(tokenMask(token))\n"
+        header += "pr fetch:        \(prFetchEnabled ? "enabled" : "disabled")\n"
+        header += "poll interval:   \(Int(pollIntervalSeconds))s\n"
+        header += "latest unread:   \(latestUnread.count)\n"
+        header += "latest read:     \(latestRead.count)\n"
+        header += "latest PRs:      \(latestPRs.count)\n"
         header += "\n=== Recent log entries (most recent last, max \(Self.logEntriesLimit)) ===\n"
 
         let body = logEntries.map { (date, msg) in

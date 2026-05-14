@@ -9,9 +9,9 @@ A tiny macOS menu bar app that shows your GitHub unread-notifications count and 
 - Polls `https://api.github.com/notifications` (default every 60s, honors GitHub's `X-Poll-Interval` header).
 - Menu bar shows a tray icon + unread count. Icon stays visible at 0; the count just hides.
 - New notifications fire macOS banner alerts. Clicking the banner — or the menu — opens [github.com/notifications](https://github.com/notifications).
-- Two classic personal access tokens, each at `~/.config/gh-notif-bar/` (mode `0600`), entered via the menu's "Set Tokens…" item:
-  - `notifications_token` — `notifications` scope. Powers the unread/read rows and banner alerts.
-  - `pr_token` — `repo` scope. Powers the "Needs your review" section.
+- One classic personal access token at `~/.config/gh-notif-bar/token` (mode `0600`), entered via the menu's "Set Token…" item:
+  - `notifications` scope is required (powers the unread/read rows and banner alerts).
+  - `repo` scope is optional — tick the "Token has 'repo' scope" checkbox in the dialog to enable the "Needs your review" PR section.
 - The first poll after launch is silent (it just seeds the seen-set) so you don't get a flood of banners on startup.
 
 States shown in the menu bar:
@@ -29,8 +29,7 @@ States shown in the menu bar:
 
 - macOS 13+
 - Xcode command line tools (`xcode-select --install`) — only needed if building from source
-- A GitHub **classic** PAT with the `notifications` scope (required for the notifications list + banners).
-- Optionally a second **classic** PAT with the `repo` scope (enables the "Needs your review" section). Without it the PR section is just hidden — notifications still work. For SSO orgs, click "Configure SSO" next to each token on github.com/settings/tokens after generating, to authorize for the org.
+- A GitHub **classic** PAT with the `notifications` scope (required). Optionally also tick `repo` on the same token to enable the "Needs your review" PR section — then check the "Token has 'repo' scope" box in the Set Token dialog. For SSO orgs, click "Configure SSO" next to the token on github.com/settings/tokens after generating, to authorize for the org.
 
 ### Install via Homebrew
 
