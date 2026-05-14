@@ -25,11 +25,19 @@ States shown in the menu bar:
 
 ### Requirements
 
-- macOS 12+
-- Xcode command line tools (`xcode-select --install`)
+- macOS 13+
+- Xcode command line tools (`xcode-select --install`) — only needed if building from source
 - A GitHub personal access token with the `notifications` scope (classic), or a fine-grained token with **Notifications: read**
 
-### Build
+### Install via Homebrew
+
+```sh
+brew tap apomerenk/tap
+brew install --cask github-notifications-menu-bar
+open -a GitHubNotifications
+```
+
+### Build from source
 
 ```sh
 git clone https://github.com/apomerenk/github-notification-menu-bar.git
@@ -54,18 +62,11 @@ To get the menu back when the icon is hidden (count is 0), re-launch the app fro
 
 ## Auto-launch on login
 
-System Settings → General → Login Items → click `+` → add `GitHubNotifications.app`.
+Click the menu bar icon → **Launch at Login** to toggle. macOS may prompt for permission the first time. (Fallback: System Settings → General → Login Items → `+` → add `GitHubNotifications.app`.)
 
-## Homebrew
+## Releases
 
-Not currently. There's no formula or cask published. If you want `brew install` ergonomics, the lightweight option is a [personal tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap):
-
-```sh
-brew tap apomerenk/tap
-brew install --cask github-notifications-menu-bar
-```
-
-…would require publishing `homebrew-tap` with a cask pointing at a release artifact built by `build.sh`. Happy to wire that up if you want it.
+Tagged commits cut a release: `git tag v1.2.3 && git push --tags` triggers [.github/workflows/release.yml](.github/workflows/release.yml), which builds the app, zips it, and uploads it to a GitHub release. The Homebrew tap cask points at that artifact.
 
 ## Files
 

@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Package
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd build
+          ditto -c -k --keepParent GitHubNotifications.app "GitHubNotifications-${VERSION}.zip"
+          SHA=$(shasum -a 256 "GitHubNotifications-${VERSION}.zip" | awk '{print $1}')
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Artifact sha256: ${SHA}"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/GitHubNotifications-*.zip
+          generate_release_notes: true
+          body: |
+            Artifact sha256: `${{ steps.package.outputs.sha256 }}`
+
+            Update the Homebrew cask in `apomerenk/homebrew-tap` with this sha256.
