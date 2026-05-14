@@ -1,36 +1,103 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 jobs:
-  build:
+  release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'release:patch') ||
+       contains(github.event.pull_request.labels.*.name, 'release:minor') ||
+       contains(github.event.pull_request.labels.*.name, 'release:major'))
     runs-on: macos-14
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Compute next version
+        id: bump
+        run: |
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          if echo "$LABELS" | grep -q 'release:major'; then BUMP=major
+          elif echo "$LABELS" | grep -q 'release:minor'; then BUMP=minor
+          else BUMP=patch
+          fi
+          CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+          IFS=. read -r MA MI PA <<< "$CURRENT"
+          MA=${MA:-0}; MI=${MI:-0}; PA=${PA:-0}
+          case "$BUMP" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          NEW="$MA.$MI.$PA"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Bumping $CURRENT -> $NEW ($BUMP)"
+
+      - name: Update Info.plist
+        run: |
+          V="${{ steps.bump.outputs.version }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" Info.plist
+
+      - name: Commit + tag
+        run: |
+          V="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Info.plist
+          git commit -m "chore: release v$V"
+          git tag "v$V"
+          git push origin main
+          git push origin "v$V"
 
       - name: Build
         run: ./build.sh
 
       - name: Package
-        id: package
+        id: pkg
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          V="${{ steps.bump.outputs.version }}"
           cd build
-          ditto -c -k --keepParent GitHubNotifications.app "GitHubNotifications-${VERSION}.zip"
-          SHA=$(shasum -a 256 "GitHubNotifications-${VERSION}.zip" | awk '{print $1}')
-          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Artifact sha256: ${SHA}"
+          ditto -c -k --keepParent GitHubNotifications.app "GitHubNotifications-${V}.zip"
+          SHA=$(shasum -a 256 "GitHubNotifications-${V}.zip" | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Artifact sha256: $SHA"
 
-      - name: Release
+      - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: v${{ steps.bump.outputs.version }}
           files: build/GitHubNotifications-*.zip
-          generate_release_notes: true
           body: |
-            Artifact sha256: `${{ steps.package.outputs.sha256 }}`
+            ${{ github.event.pull_request.title }}
 
-            Update the Homebrew cask in `apomerenk/homebrew-tap` with this sha256.
+            ${{ github.event.pull_request.body }}
+
+            ---
+            From #${{ github.event.pull_request.number }}. Artifact sha256: `${{ steps.pkg.outputs.sha256 }}`
+
+      - name: Bump Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          V="${{ steps.bump.outputs.version }}"
+          SHA="${{ steps.pkg.outputs.sha256 }}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/apomerenk/homebrew-tap.git" tap
+          cd tap
+          CASK=Casks/github-notifications-menu-bar.rb
+          sed -i '' -E "s/^  version \".*\"/  version \"$V\"/" "$CASK"
+          sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$CASK"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CASK"
+          git commit -m "Bump github-notifications-menu-bar to v$V"
+          git push origin main

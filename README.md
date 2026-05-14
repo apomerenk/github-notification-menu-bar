@@ -66,7 +66,17 @@ Click the menu bar icon → **Launch at Login** to toggle. macOS may prompt for 
 
 ## Releases
 
-Tagged commits cut a release: `git tag v1.2.3 && git push --tags` triggers [.github/workflows/release.yml](.github/workflows/release.yml), which builds the app, zips it, and uploads it to a GitHub release. The Homebrew tap cask points at that artifact.
+Releases are label-driven. To ship a change, add one of these labels to the PR before merging:
+
+| Label | Bump |
+|---|---|
+| `release:patch` | 1.2.3 → 1.2.4 |
+| `release:minor` | 1.2.3 → 1.3.0 |
+| `release:major` | 1.2.3 → 2.0.0 |
+
+No label → no release. On merge, [.github/workflows/release.yml](.github/workflows/release.yml) bumps `CFBundleShortVersionString` in [Info.plist](Info.plist), tags the commit, builds the `.app`, attaches a zip to a GitHub release, and pushes the new version + sha256 to the `apomerenk/homebrew-tap` cask. `brew upgrade --cask github-notifications-menu-bar` picks it up.
+
+Release notes are the PR title + body — write them for the eventual reader of the changelog.
 
 ## Files
 
