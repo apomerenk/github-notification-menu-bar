@@ -25,11 +25,19 @@ States shown in the menu bar:
 
 ### Requirements
 
-- macOS 12+
-- Xcode command line tools (`xcode-select --install`)
+- macOS 13+
+- Xcode command line tools (`xcode-select --install`) — only needed if building from source
 - A GitHub personal access token with the `notifications` scope (classic), or a fine-grained token with **Notifications: read**
 
-### Build
+### Install via Homebrew
+
+```sh
+brew tap apomerenk/tap
+brew install --cask github-notifications-menu-bar
+open -a GitHubNotifications
+```
+
+### Build from source
 
 ```sh
 git clone https://github.com/apomerenk/github-notification-menu-bar.git
@@ -54,18 +62,21 @@ To get the menu back when the icon is hidden (count is 0), re-launch the app fro
 
 ## Auto-launch on login
 
-System Settings → General → Login Items → click `+` → add `GitHubNotifications.app`.
+Click the menu bar icon → **Launch at Login** to toggle. macOS may prompt for permission the first time. (Fallback: System Settings → General → Login Items → `+` → add `GitHubNotifications.app`.)
 
-## Homebrew
+## Releases
 
-Not currently. There's no formula or cask published. If you want `brew install` ergonomics, the lightweight option is a [personal tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap):
+Releases are label-driven. To ship a change, add one of these labels to the PR before merging:
 
-```sh
-brew tap apomerenk/tap
-brew install --cask github-notifications-menu-bar
-```
+| Label | Bump |
+|---|---|
+| `release:patch` | 1.2.3 → 1.2.4 |
+| `release:minor` | 1.2.3 → 1.3.0 |
+| `release:major` | 1.2.3 → 2.0.0 |
 
-…would require publishing `homebrew-tap` with a cask pointing at a release artifact built by `build.sh`. Happy to wire that up if you want it.
+No label → no release. On merge, [.github/workflows/release.yml](.github/workflows/release.yml) bumps `CFBundleShortVersionString` in [Info.plist](Info.plist), tags the commit, builds the `.app`, attaches a zip to a GitHub release, and pushes the new version + sha256 to the `apomerenk/homebrew-tap` cask. `brew upgrade --cask github-notifications-menu-bar` picks it up.
+
+Release notes are the PR title + body — write them for the eventual reader of the changelog.
 
 ## Files
 

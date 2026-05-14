@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import UserNotifications
 
 // MARK: - Entry point
@@ -33,23 +34,27 @@ final class PasteableSecureTextField: NSSecureTextField {
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var token: String?
     private var seenIDs = Set<String>()
     private var hasFetchedOnce = false
     private var pollIntervalSeconds: TimeInterval = 60
+    private var launchAtLoginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         renderBadge(state: .idle)
 
         let menu = NSMenu()
+        menu.delegate = self
         menu.addItem(withTitle: "Open GitHub Notifications", action: #selector(openNotifications), keyEquivalent: "o")
         menu.addItem(withTitle: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Set Token…", action: #selector(setToken), keyEquivalent: ",")
+        launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        menu.addItem(launchAtLoginItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -109,6 +114,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func openNotifications() {
         NSWorkspace.shared.open(URL(string: "https://github.com/notifications")!)
+    }
+
+    // MARK: Launch at Login
+
+    @objc private func toggleLaunchAtLogin() {
+        let svc = SMAppService.mainApp
+        do {
+            if svc.status == .enabled {
+                try svc.unregister()
+            } else {
+                try svc.register()
+            }
+        } catch {
+            NSLog("Launch-at-login toggle failed: \(error)")
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
     private func startPolling() {
