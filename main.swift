@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var hasFetchedOnce = false
     private var pollIntervalSeconds: TimeInterval = 60
     private var launchAtLoginItem: NSMenuItem!
+    private var hideReleasesItem: NSMenuItem!
+    private static let hideReleasesKey = "hideReleases"
 
     private var latestUnread: [[String: Any]] = []
     private var latestRead: [[String: Any]] = []
@@ -71,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.addItem(withTitle: "Set Token…", action: #selector(setTokens), keyEquivalent: ",")
         launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         menu.addItem(launchAtLoginItem)
+        hideReleasesItem = NSMenuItem(title: "Hide Releases", action: #selector(toggleHideReleases), keyEquivalent: "")
+        menu.addItem(hideReleasesItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -208,8 +212,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
     }
 
+    @objc private func toggleHideReleases() {
+        let next = !UserDefaults.standard.bool(forKey: Self.hideReleasesKey)
+        UserDefaults.standard.set(next, forKey: Self.hideReleasesKey)
+        refresh()
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        hideReleasesItem.state = UserDefaults.standard.bool(forKey: Self.hideReleasesKey) ? .on : .off
     }
 
     private func startPolling() {
@@ -277,8 +288,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     private func handle(notifications: [[String: Any]]) {
-        let unread = notifications.filter { ($0["unread"] as? Bool) ?? true }
-        let read = notifications.filter { ($0["unread"] as? Bool) == false }
+        let hideReleases = UserDefaults.standard.bool(forKey: Self.hideReleasesKey)
+        let filtered = hideReleases
+            ? notifications.filter { (($0["subject"] as? [String: Any])?["type"] as? String) != "Release" }
+            : notifications
+
+        let unread = filtered.filter { ($0["unread"] as? Bool) ?? true }
+        let read = filtered.filter { ($0["unread"] as? Bool) == false }
 
         latestUnread = unread
         latestRead = read
