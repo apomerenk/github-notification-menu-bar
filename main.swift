@@ -38,10 +38,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var token: String?
+    private var prFetchEnabled: Bool = false
     private var seenIDs = Set<String>()
     private var hasFetchedOnce = false
     private var pollIntervalSeconds: TimeInterval = 60
     private var launchAtLoginItem: NSMenuItem!
+    private var hideReleasesItem: NSMenuItem!
+    private static let hideReleasesKey = "hideReleases"
+
+    private var latestUnread: [[String: Any]] = []
+    private var latestRead: [[String: Any]] = []
+    private var latestPRs: [[String: Any]] = []
+    private var latestAuthored: [[String: Any]] = []
+
+    private var logEntries: [(Date, String)] = []
+    private static let logEntriesLimit = 500
+    private var logWindow: NSWindow?
+    private var logTextView: NSTextView?
 
     // Dynamically inserted notification rows at the top of the menu carry this tag
     // so we can remove the previous batch before inserting the next.
@@ -54,11 +67,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Open GitHub Notifications", action: #selector(openNotifications), keyEquivalent: "o")
-        menu.addItem(withTitle: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
+        menu.addItem(withTitle: "Refresh Now", action: #selector(refreshAll), keyEquivalent: "r")
+        menu.addItem(withTitle: "Show Logs…", action: #selector(showLogs), keyEquivalent: "l")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "Set Token…", action: #selector(setToken), keyEquivalent: ",")
+        menu.addItem(withTitle: "Set Token…", action: #selector(setTokens), keyEquivalent: ",")
         launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         menu.addItem(launchAtLoginItem)
+        hideReleasesItem = NSMenuItem(title: "Hide Releases", action: #selector(toggleHideReleases), keyEquivalent: "")
+        menu.addItem(hideReleasesItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -66,66 +82,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        loadToken()
-        if token == nil || token?.isEmpty == true {
-            DispatchQueue.main.async { self.setToken() }
+        loadTokens()
+        if (token ?? "").isEmpty {
+            DispatchQueue.main.async { self.setTokens() }
         }
         startPolling()
     }
 
     // MARK: Token storage
 
-    private func tokenURL() -> URL {
+    private func configDir() -> URL {
         let dir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/gh-notif-bar", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("token")
+        return dir
     }
 
-    private func loadToken() {
+    private func tokenURL() -> URL { configDir().appendingPathComponent("token") }
+    private static let prFetchEnabledKey = "prFetchEnabled"
+
+    private func loadTokens() {
+        let fm = FileManager.default
+
+        // Migrate from the short-lived two-file layout (notifications_token + pr_token):
+        // copy notifications_token into 'token' if it's the only one present, infer
+        // prFetchEnabled from the existence of a non-empty pr_token, then clean up.
+        let notifLegacy = configDir().appendingPathComponent("notifications_token")
+        let prLegacy = configDir().appendingPathComponent("pr_token")
+        if fm.fileExists(atPath: notifLegacy.path) && !fm.fileExists(atPath: tokenURL().path) {
+            try? fm.moveItem(at: notifLegacy, to: tokenURL())
+        }
+        if let s = try? String(contentsOf: prLegacy, encoding: .utf8),
+           !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            UserDefaults.standard.set(true, forKey: Self.prFetchEnabledKey)
+        }
+        try? fm.removeItem(at: prLegacy)
+        try? fm.removeItem(at: notifLegacy)
+
         if let s = try? String(contentsOf: tokenURL(), encoding: .utf8) {
             token = s.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        prFetchEnabled = UserDefaults.standard.bool(forKey: Self.prFetchEnabledKey)
     }
 
-    @objc private func setToken() {
+    private func writeToken(_ value: String, to url: URL) throws {
+        try value.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    @objc private func openCreateTokenURL() {
+        // Pre-tick both scopes the app might need. If the user only wants notifications
+        // they can untick 'repo' on the GitHub page before generating.
+        let url = URL(string: "https://github.com/settings/tokens/new?scopes=notifications,repo&description=GitHub%20Notifications%20menu%20bar")!
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func setTokens() {
         let alert = NSAlert()
-        alert.messageText = "GitHub Personal Access Token"
+        alert.messageText = "GitHub Token"
         alert.informativeText = """
-        Needs a classic PAT with the 'notifications' scope. Fine-grained PATs do not currently expose notifications.
+        One classic personal access token. The 'notifications' scope is required (powers the menu's unread/read rows and banner alerts). The 'repo' scope is optional — tick it on GitHub to also enable the 'Needs your review' PR section.
 
-        Click 'Create Token…' to open GitHub's classic-token page with the right scope pre-selected — hit Generate and paste the result here.
+        Click Create… to open GitHub's token page with both scopes pre-ticked. After generating, paste the token below. If you generated it with 'repo' scope, also tick the checkbox so the app fetches PRs.
 
-        Stored at ~/.config/gh-notif-bar/token (0600).
+        For SSO orgs, click 'Configure SSO' next to the token on github.com/settings/tokens after generating, to authorize for the org. Stored at ~/.config/gh-notif-bar/token (mode 0600).
         """
-        let field = PasteableSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+
+        let containerWidth: CGFloat = 460
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 80))
+
+        let field = PasteableSecureTextField(frame: NSRect(x: 0, y: 52, width: 340, height: 24))
         field.stringValue = token ?? ""
-        alert.accessoryView = field
+        container.addSubview(field)
+
+        let createBtn = NSButton(title: "Create…", target: self, action: #selector(openCreateTokenURL))
+        createBtn.frame = NSRect(x: 352, y: 50, width: 100, height: 28)
+        createBtn.bezelStyle = .rounded
+        container.addSubview(createBtn)
+
+        let repoCheckbox = NSButton(checkboxWithTitle: "Token has 'repo' scope (enable Needs your review section)", target: nil, action: nil)
+        repoCheckbox.state = prFetchEnabled ? .on : .off
+        repoCheckbox.frame = NSRect(x: 0, y: 14, width: containerWidth, height: 18)
+        container.addSubview(repoCheckbox)
+
+        alert.accessoryView = container
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Create Token…")
         NSApp.activate(ignoringOtherApps: true)
         alert.window.initialFirstResponder = field
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
+        if alert.runModal() == .alertFirstButtonReturn {
             let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
             do {
-                try value.write(to: tokenURL(), atomically: true, encoding: .utf8)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL().path)
+                try writeToken(value, to: tokenURL())
                 token = value
-                seenIDs.removeAll()
-                hasFetchedOnce = false
-                refresh()
             } catch {
-                NSLog("Failed to save token: \(error)")
+                self.log("Failed to save token: \(error)")
             }
-        case .alertThirdButtonReturn:
-            let createURL = URL(string: "https://github.com/settings/tokens/new?scopes=notifications&description=GitHub%20Notifications%20menu%20bar")!
-            NSWorkspace.shared.open(createURL)
-            DispatchQueue.main.async { self.setToken() }
-        default:
-            break
+
+            prFetchEnabled = (repoCheckbox.state == .on)
+            UserDefaults.standard.set(prFetchEnabled, forKey: Self.prFetchEnabledKey)
+
+            seenIDs.removeAll()
+            hasFetchedOnce = false
+            latestPRs = []
+            refreshAll()
         }
     }
 
@@ -146,23 +208,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 try svc.register()
             }
         } catch {
-            NSLog("Launch-at-login toggle failed: \(error)")
+            log("Launch-at-login toggle failed: \(error)")
         }
+    }
+
+    @objc private func toggleHideReleases() {
+        let next = !UserDefaults.standard.bool(forKey: Self.hideReleasesKey)
+        UserDefaults.standard.set(next, forKey: Self.hideReleasesKey)
+        refresh()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        hideReleasesItem.state = UserDefaults.standard.bool(forKey: Self.hideReleasesKey) ? .on : .off
     }
 
     private func startPolling() {
-        refresh()
+        refreshAll()
         timer = Timer.scheduledTimer(withTimeInterval: pollIntervalSeconds, repeats: true) { [weak self] _ in
-            self?.refresh()
+            self?.refreshAll()
         }
     }
 
+    @objc private func refreshAll() {
+        refresh()
+        refreshPRs()
+        refreshAuthoredPRs()
+    }
+
     @objc private func refresh() {
-        guard let token, !token.isEmpty else {
+        guard let token = token, !token.isEmpty else {
             renderBadge(state: .needsToken)
             return
         }
@@ -176,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
             guard let self else { return }
             if let err = err {
-                NSLog("Fetch error: \(err)")
+                self.log("Notifications fetch error: \(err.localizedDescription)")
                 DispatchQueue.main.async { self.renderBadge(state: .error) }
                 return
             }
@@ -190,12 +265,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
             guard (200..<300).contains(http.statusCode), let data = data,
                   let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                NSLog("Bad response: status=\(http.statusCode)")
+                self.log("Notifications bad response: status=\(http.statusCode)")
                 DispatchQueue.main.async {
                     self.renderBadge(state: http.statusCode == 401 ? .needsToken : .error)
                 }
                 return
             }
+            let unreadCount = arr.filter { ($0["unread"] as? Bool) ?? true }.count
+            let readCount = arr.count - unreadCount
+            self.log("Notifications fetch: status=\(http.statusCode), total=\(arr.count) (unread=\(unreadCount), read=\(readCount))")
             DispatchQueue.main.async { self.handle(notifications: arr) }
         }.resume()
     }
@@ -210,11 +288,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     private func handle(notifications: [[String: Any]]) {
-        let unread = notifications.filter { ($0["unread"] as? Bool) ?? true }
-        let read = notifications.filter { ($0["unread"] as? Bool) == false }
+        let hideReleases = UserDefaults.standard.bool(forKey: Self.hideReleasesKey)
+        let filtered = hideReleases
+            ? notifications.filter { (($0["subject"] as? [String: Any])?["type"] as? String) != "Release" }
+            : notifications
 
-        renderBadge(state: .count(unread.count))
-        updateNotificationItems(unread: unread, read: read)
+        let unread = filtered.filter { ($0["unread"] as? Bool) ?? true }
+        let read = filtered.filter { ($0["unread"] as? Bool) == false }
+
+        latestUnread = unread
+        latestRead = read
+        updateBadge()
+        rebuildMenu()
 
         let currentIDs = Set(unread.compactMap { $0["id"] as? String })
         if hasFetchedOnce {
@@ -232,19 +317,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         hasFetchedOnce = true
     }
 
-    // MARK: Notification list in menu
+    // MARK: PR fetching
 
-    private func updateNotificationItems(unread: [[String: Any]], read: [[String: Any]]) {
+    @objc private func refreshPRs() {
+        searchPRs(query: "is:pr is:open review-requested:@me", label: "review-requested") { [weak self] items in
+            guard let self else { return }
+            self.latestPRs = items
+            self.updateBadge()
+            self.rebuildMenu()
+        }
+    }
+
+    @objc private func refreshAuthoredPRs() {
+        searchPRs(query: "is:pr is:open author:@me", label: "authored") { [weak self] items in
+            guard let self else { return }
+            self.latestAuthored = items
+            self.rebuildMenu()
+        }
+    }
+
+    private func searchPRs(query: String, label: String, completion: @escaping ([[String: Any]]) -> Void) {
+        guard prFetchEnabled, let token = token, !token.isEmpty else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.github.com/search/issues?q=\(encoded)&per_page=30") else {
+            return
+        }
+
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        req.setValue("gh-notif-bar", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            guard let self else { return }
+            if let err = err {
+                self.log("PR fetch (\(label)) error: \(err.localizedDescription)")
+                return
+            }
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let items = json["items"] as? [[String: Any]] else {
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                let snippet = (data.flatMap { String(data: $0, encoding: .utf8) }?.prefix(200)).map(String.init) ?? ""
+                self.log("PR bad response (\(label)): status=\(status) body=\(snippet)")
+                return
+            }
+            let totalCount = (json["total_count"] as? Int) ?? items.count
+            self.log("PR fetch (\(label)): status=\(http.statusCode), items=\(items.count), total_count=\(totalCount)")
+            DispatchQueue.main.async { completion(items) }
+        }.resume()
+    }
+
+    private func updateBadge() {
+        let total = latestUnread.count + latestPRs.count
+        renderBadge(state: .count(total))
+    }
+
+    // MARK: Menu rebuild
+
+    private func rebuildMenu() {
         guard let menu = statusItem.menu else { return }
 
         while let first = menu.items.first, first.tag == Self.notificationItemTag {
             menu.removeItem(first)
         }
 
-        let unreadRows = Array(unread.prefix(15))
-        let readRows = Array(read.prefix(10))
-        guard !unreadRows.isEmpty || !readRows.isEmpty else { return }
+        let unreadRows = Array(latestUnread.prefix(15))
+        let readRows = Array(latestRead.prefix(10))
+        let reviewRows = Array(latestPRs.prefix(15))
+        let authoredRows = Array(latestAuthored.prefix(15))
+        guard !unreadRows.isEmpty || !readRows.isEmpty || !reviewRows.isEmpty || !authoredRows.isEmpty else { return }
 
+        // Inserting at position 0 in reverse of intended final order.
         let separator = NSMenuItem.separator()
         separator.tag = Self.notificationItemTag
         menu.insertItem(separator, at: 0)
@@ -260,11 +410,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             menu.insertItem(parent, at: 0)
         }
 
+        // Authored PRs section (below review-requested in final order, so insert first).
+        insertPRSection(authoredRows, readyHeader: "Your PRs", draftsHeader: "Your drafts", into: menu)
+
+        // Review-requested PRs section.
+        insertPRSection(reviewRows, readyHeader: "Needs your review", draftsHeader: "Drafts", into: menu)
+
         for n in unreadRows.reversed() {
             let item = makeNotificationItem(n)
             item.tag = Self.notificationItemTag
             menu.insertItem(item, at: 0)
         }
+    }
+
+    private func insertPRSection(_ rows: [[String: Any]], readyHeader: String, draftsHeader: String, into menu: NSMenu) {
+        guard !rows.isEmpty else { return }
+        let drafts = rows.filter { ($0["draft"] as? Bool) == true }
+        let ready = rows.filter { ($0["draft"] as? Bool) != true }
+
+        if !drafts.isEmpty {
+            for item in drafts.reversed() {
+                let menuItem = makePRItem(item)
+                menuItem.tag = Self.notificationItemTag
+                menu.insertItem(menuItem, at: 0)
+            }
+            let h = NSMenuItem(title: draftsHeader, action: nil, keyEquivalent: "")
+            h.isEnabled = false
+            h.tag = Self.notificationItemTag
+            menu.insertItem(h, at: 0)
+        }
+
+        if !ready.isEmpty {
+            for item in ready.reversed() {
+                let menuItem = makePRItem(item)
+                menuItem.tag = Self.notificationItemTag
+                menu.insertItem(menuItem, at: 0)
+            }
+        }
+
+        let topHeader = NSMenuItem(title: ready.isEmpty ? "\(readyHeader) (drafts)" : readyHeader, action: nil, keyEquivalent: "")
+        topHeader.isEnabled = false
+        topHeader.tag = Self.notificationItemTag
+        menu.insertItem(topHeader, at: 0)
+    }
+
+    private func makePRItem(_ item: [String: Any]) -> NSMenuItem {
+        let title = item["title"] as? String ?? "PR"
+        let number = item["number"] as? Int ?? 0
+        let htmlURLString = item["html_url"] as? String ?? "https://github.com/pulls"
+        let repo = prRepoSlug(fromHTMLURL: htmlURLString)
+
+        let combined = repo.isEmpty ? "\(title) #\(number)" : "\(repo)#\(number) — \(title)"
+        let truncated = combined.count > 70 ? String(combined.prefix(67)) + "…" : combined
+
+        let menuItem = NSMenuItem(title: truncated, action: #selector(openNotificationItem(_:)), keyEquivalent: "")
+        menuItem.target = self
+        menuItem.image = symbolImage(forSubjectType: "PullRequest")
+        menuItem.representedObject = htmlURLString
+        return menuItem
+    }
+
+    private func prRepoSlug(fromHTMLURL urlString: String) -> String {
+        guard let u = URL(string: urlString), u.pathComponents.count >= 3 else { return "" }
+        return "\(u.pathComponents[1])/\(u.pathComponents[2])"
     }
 
     private func makeNotificationItem(_ n: [String: Any]) -> NSMenuItem {
@@ -311,6 +519,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         s = s.replacingOccurrences(of: "/pulls/", with: "/pull/")
         s = s.replacingOccurrences(of: "/commits/", with: "/commit/")
         return URL(string: s) ?? fallback
+    }
+
+    // MARK: Logs
+
+    private func log(_ message: String) {
+        NSLog("%@", message)
+        let entry = (Date(), message)
+        DispatchQueue.main.async {
+            self.logEntries.append(entry)
+            if self.logEntries.count > Self.logEntriesLimit {
+                self.logEntries.removeFirst(self.logEntries.count - Self.logEntriesLimit)
+            }
+            if self.logWindow?.isVisible == true {
+                self.refreshLogView()
+            }
+        }
+    }
+
+    @objc private func showLogs() {
+        if logWindow == nil {
+            let win = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 460),
+                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                backing: .buffered, defer: false
+            )
+            win.title = "GitHubNotifications — Logs"
+            win.isReleasedWhenClosed = false
+            win.center()
+
+            let contentView = win.contentView!
+            let scrollView = NSScrollView(frame: contentView.bounds)
+            scrollView.hasVerticalScroller = true
+            scrollView.hasHorizontalScroller = false
+            scrollView.autohidesScrollers = false
+            scrollView.autoresizingMask = [.width, .height]
+            scrollView.borderType = .noBorder
+
+            let textView = NSTextView(frame: scrollView.bounds)
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            textView.autoresizingMask = .width
+            textView.minSize = NSSize(width: 0, height: 0)
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.isVerticallyResizable = true
+            textView.isHorizontallyResizable = false
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainerInset = NSSize(width: 8, height: 8)
+
+            scrollView.documentView = textView
+            contentView.addSubview(scrollView)
+
+            logTextView = textView
+            logWindow = win
+        }
+
+        refreshLogView()
+        NSApp.activate(ignoringOtherApps: true)
+        logWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func refreshLogView() {
+        guard let textView = logTextView else { return }
+
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm:ss"
+        let nowStamp = fmt.string(from: Date())
+
+        var header = "=== gh-notif-bar diagnostic — \(nowStamp) ===\n"
+        header += "token:           \(tokenMask(token))\n"
+        header += "pr fetch:        \(prFetchEnabled ? "enabled" : "disabled")\n"
+        header += "poll interval:   \(Int(pollIntervalSeconds))s\n"
+        header += "latest unread:   \(latestUnread.count)\n"
+        header += "latest read:     \(latestRead.count)\n"
+        header += "latest review-requested PRs: \(latestPRs.count)\n"
+        header += "latest authored PRs:         \(latestAuthored.count)\n"
+        header += "\n=== Recent log entries (most recent last, max \(Self.logEntriesLimit)) ===\n"
+
+        let body = logEntries.map { (date, msg) in
+            "\(fmt.string(from: date))  \(msg)"
+        }.joined(separator: "\n")
+
+        textView.string = header + (body.isEmpty ? "(no entries yet)" : body)
+        textView.scrollToEndOfDocument(nil)
+    }
+
+    private func tokenMask(_ token: String?) -> String {
+        guard let t = token, !t.isEmpty else { return "missing" }
+        let last = t.suffix(4)
+        return "present (\(t.count) chars, ...\(last))"
     }
 
     // MARK: Badge
