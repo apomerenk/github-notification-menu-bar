@@ -313,6 +313,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 post(title: repoName, body: body, id: id)
             }
         }
+
+        // Dismiss system notifications for threads that were unread last poll but
+        // aren't anymore (read on github.com, marked done, etc.). The UN identifier
+        // is the GitHub thread ID, matching what post() used.
+        let dismissed = seenIDs.subtracting(currentIDs)
+        if !dismissed.isEmpty {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Array(dismissed))
+        }
+
         seenIDs = currentIDs
         hasFetchedOnce = true
     }
